@@ -1,0 +1,11 @@
+services:
+  api:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:8000"
+    # IBKR TWS runs on the host; on Linux use host networking, on macOS/Windows
+    # set IBKR_HOST=host.docker.internal in .env.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
