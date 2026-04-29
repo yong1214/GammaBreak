@@ -66,34 +66,61 @@ class IBKRService:
         if not params:
             raise RuntimeError(f"No option parameters returned for {symbol}")
 
-        smart = next((p for p in params if p.exchange == "SMART"), params[0])
-        expiries = sorted({datetime.strptime(e, "%Y%m%d").date() for e in smart.expirations})
-        target_expiry = expiry or expiries[0]
+        # Prefer the SMART chain whose tradingClass matches the symbol; fall back
+        # to any SMART chain, then anything. This avoids picking a sibling class
+        # (e.g. SPXW) whose strikes/expirations don't apply to our requested contract.
+        chain = (
+            next((p for p in params if p.exchange == "SMART" and p.tradingClass == symbol), None)
+            or next((p for p in params if p.exchange == "SMART"), None)
+            or params[0]
+        )
+
+        today = date.today()
+        all_expiries = sorted({datetime.strptime(e, "%Y%m%d").date() for e in chain.expirations})
+        future_expiries = [e for e in all_expiries if e >= today]
+        if not future_expiries:
+            raise RuntimeError(f"No future expirations for {symbol}")
+        target_expiry = expiry or future_expiries[0]
         target_expiry_str = target_expiry.strftime("%Y%m%d")
 
         spot = await self.get_underlying_price(symbol)
         if spot is None:
             raise RuntimeError(f"Could not retrieve spot price for {symbol}")
 
-        # Pick the N strikes closest to spot on each side
-        all_strikes = sorted(float(s) for s in smart.strikes)
-        nearest = sorted(all_strikes, key=lambda s: abs(s - spot))[: strike_window * 2]
+        # Strikes returned by reqSecDefOptParams are the union across all expiries.
+        # Limit to ±15% of spot, then pick the N nearest on each side.
+        viable_strikes = sorted(
+            float(s) for s in chain.strikes if 0.85 * spot <= float(s) <= 1.15 * spot
+        )
+        nearest = sorted(viable_strikes, key=lambda s: abs(s - spot))[: strike_window * 2]
         nearest = sorted(nearest)
 
-        contracts = []
-        for strike in nearest:
-            for right in ("C", "P"):
-                contracts.append(Option(symbol, target_expiry_str, strike, right, "SMART"))
+        candidates = [
+            Option(symbol, target_expiry_str, strike, right, "SMART", tradingClass=symbol)
+            for strike in nearest
+            for right in ("C", "P")
+        ]
 
-        await ib.qualifyContractsAsync(*contracts)
-        tickers = await ib.reqTickersAsync(*contracts)
+        # Qualify in one round-trip; IBKR fills conId on success and leaves it 0
+        # on failure. Drop the failures so reqTickers isn't called on bad contracts.
+        await ib.qualifyContractsAsync(*candidates)
+        qualified = [c for c in candidates if c.conId]
+        skipped = len(candidates) - len(qualified)
+        if skipped:
+            logger.info("Skipped %d unqualified contracts for %s %s", skipped, symbol, target_expiry_str)
+        if not qualified:
+            raise RuntimeError(
+                f"No tradable strikes for {symbol} on {target_expiry}. "
+                "Try a different expiry or check the trading class."
+            )
 
+        tickers = await ib.reqTickersAsync(*qualified)
         quotes = [self._ticker_to_quote(t, symbol, target_expiry, spot) for t in tickers]
 
         return OptionChain(
             symbol=symbol,
             underlying_price=spot,
-            expiries=expiries,
+            expiries=future_expiries,
             quotes=quotes,
         )
 
