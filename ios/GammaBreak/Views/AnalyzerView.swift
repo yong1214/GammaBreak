@@ -51,7 +51,7 @@ private struct AnalyzerContent: View {
     }
 
     private var headerCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(vm.symbol).font(.largeTitle.bold())
                 Spacer()
@@ -59,6 +59,23 @@ private struct AnalyzerContent: View {
                     Text(spot, format: .currency(code: "USD")).font(.title2.monospacedDigit())
                 }
             }
+
+            if let iv = vm.ivRank {
+                HStack(spacing: 16) {
+                    if let cur = iv.currentIv {
+                        statBadge("IV", String(format: "%.1f%%", cur * 100), .blue)
+                    }
+                    if let rank = iv.rank {
+                        statBadge("IV Rank", String(format: "%.0f", rank), rankColor(rank))
+                    } else if let msg = iv.message {
+                        Text(msg).font(.caption2).foregroundColor(.secondary).lineLimit(2)
+                    }
+                    if let pct = iv.percentile {
+                        statBadge("IV %ile", String(format: "%.0f", pct), rankColor(pct))
+                    }
+                }
+            }
+
             Picker("Horizon", selection: $vm.horizonMinutes) {
                 Text("15m").tag(15)
                 Text("1h").tag(60)
@@ -71,6 +88,19 @@ private struct AnalyzerContent: View {
         .padding()
         .background(Color(.secondarySystemBackground))
         .cornerRadius(12)
+    }
+
+    private func statBadge(_ label: String, _ value: String, _ color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(label).font(.caption2).foregroundColor(.secondary)
+            Text(value).font(.subheadline.monospacedDigit().bold()).foregroundColor(color)
+        }
+    }
+
+    private func rankColor(_ v: Double) -> Color {
+        if v >= 70 { return .red }
+        if v <= 30 { return .green }
+        return .orange
     }
 
     @ViewBuilder

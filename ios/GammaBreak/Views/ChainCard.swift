@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChainCard: View {
     let chain: OptionChain
+    @State private var ticketQuote: OptionQuote?
 
     private var rows: [ChainRow] {
         let grouped = Dictionary(grouping: chain.quotes, by: { $0.strike })
@@ -19,7 +20,11 @@ struct ChainCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Chain · \(chain.symbol)").font(.headline)
+            HStack {
+                Text("Chain · \(chain.symbol)").font(.headline)
+                Spacer()
+                Text("Tap a side to trade").font(.caption2).foregroundColor(.secondary)
+            }
 
             HStack {
                 Text("Δ / Γ").frame(maxWidth: .infinity, alignment: .leading)
@@ -30,10 +35,18 @@ struct ChainCard: View {
             .foregroundColor(.secondary)
 
             ForEach(Array(rows.enumerated()), id: \.element.strike) { idx, row in
-                HStack(alignment: .center) {
-                    callCell(row.call)
+                HStack(alignment: .center, spacing: 4) {
+                    Button { if let c = row.call { ticketQuote = c } } label: {
+                        callCell(row.call)
+                    }
+                    .buttonStyle(.plain)
+
                     strikeCell(row.strike, isATM: idx == atmIndex)
-                    putCell(row.put)
+
+                    Button { if let p = row.put { ticketQuote = p } } label: {
+                        putCell(row.put)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .font(.caption.monospacedDigit())
                 .padding(.vertical, 2)
@@ -45,6 +58,9 @@ struct ChainCard: View {
         .padding()
         .background(Color(.secondarySystemBackground))
         .cornerRadius(12)
+        .sheet(item: $ticketQuote) { q in
+            OrderTicketView(quote: q)
+        }
     }
 
     @ViewBuilder

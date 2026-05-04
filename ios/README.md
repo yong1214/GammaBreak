@@ -28,5 +28,6 @@ Add tickers from the **Watchlist** tab and tap one to open the analyzer.
 ## Screens
 
 - **Watchlist** — managed list of tickers
-- **Analyzer** — per-ticker prediction, gamma walls, and option chain with Greeks
-- **Settings** — backend URL + token
+- **Analyzer** — per-ticker prediction, IV rank header, multi-expiry gamma walls, and an option chain you can tap to open an order ticket
+- **Positions** — live IBKR portfolio with mark-to-market P&L and account summary
+- **Settings** — backend URL, bearer token, wall-crossing alert toggles

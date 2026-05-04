@@ -9,6 +9,7 @@ final class AnalyzerViewModel: ObservableObject {
     @Published private(set) var chain: OptionChain?
     @Published private(set) var gamma: GammaProfile?
     @Published private(set) var prediction: PricePrediction?
+    @Published private(set) var ivRank: IVRank?
     @Published private(set) var loading = false
     @Published var errorMessage: String?
 
@@ -29,17 +30,18 @@ final class AnalyzerViewModel: ObservableObject {
         async let predictTask = safeFetch {
             try await self.api.predict(symbol: self.symbol, horizonMinutes: self.horizonMinutes)
         }
+        async let ivTask = safeFetch { try await self.api.ivRank(symbol: self.symbol) }
 
         chain = await chainTask
         gamma = await gammaTask
         prediction = await predictTask
+        ivRank = await ivTask
     }
 
     private func safeFetch<T>(_ op: @escaping () async throws -> T) async -> T? {
         do {
             return try await op()
         } catch {
-            // surface only the first error so the UI isn't spammed
             if errorMessage == nil { errorMessage = error.localizedDescription }
             return nil
         }

@@ -97,3 +97,113 @@ struct PricePrediction: Codable {
         case lowerTarget = "lower_target"
     }
 }
+
+struct IVRank: Codable {
+    let symbol: String
+    let currentIv: Double?
+    let rank: Double?
+    let percentile: Double?
+    let minIv: Double?
+    let maxIv: Double?
+    let samples: Int?
+    let lookbackDays: Int?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case symbol, rank, percentile, samples, message
+        case currentIv = "current_iv"
+        case minIv = "min_iv"
+        case maxIv = "max_iv"
+        case lookbackDays = "lookback_days"
+    }
+}
+
+struct Position: Codable, Identifiable, Hashable {
+    var id: String {
+        "\(symbol)-\(secType)-\(expiry ?? "")-\(strike ?? 0)-\(right ?? "")"
+    }
+    let symbol: String
+    let secType: String
+    let right: String?
+    let strike: Double?
+    let expiry: String?
+    let position: Double
+    let avgCost: Double
+    let marketPrice: Double?
+    let marketValue: Double?
+    let unrealizedPnl: Double?
+    let realizedPnl: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case symbol, position, expiry, right, strike
+        case secType = "sec_type"
+        case avgCost = "avg_cost"
+        case marketPrice = "market_price"
+        case marketValue = "market_value"
+        case unrealizedPnl = "unrealized_pnl"
+        case realizedPnl = "realized_pnl"
+    }
+}
+
+struct AccountSummary: Codable {
+    let netLiquidation: Double?
+    let buyingPower: Double?
+    let availableFunds: Double?
+    let totalCashValue: Double?
+    let grossPositionValue: Double?
+    let maintMarginReq: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case netLiquidation = "NetLiquidation"
+        case buyingPower = "BuyingPower"
+        case availableFunds = "AvailableFunds"
+        case totalCashValue = "TotalCashValue"
+        case grossPositionValue = "GrossPositionValue"
+        case maintMarginReq = "MaintMarginReq"
+    }
+}
+
+struct OrderRequest: Codable {
+    let symbol: String
+    let expiry: String         // yyyy-MM-dd
+    let strike: Double
+    let right: String          // "C" or "P"
+    let action: String         // "BUY" or "SELL"
+    let quantity: Int
+    let orderType: String      // "LMT" or "MKT"
+    let limitPrice: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case symbol, expiry, strike, right, action, quantity
+        case orderType = "order_type"
+        case limitPrice = "limit_price"
+    }
+}
+
+struct OrderResult: Codable {
+    let orderId: Int?
+    let permId: Int?
+    let status: String?
+    let filled: Double?
+    let remaining: Double?
+    let avgFillPrice: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case orderId = "order_id"
+        case permId = "perm_id"
+        case status, filled, remaining
+        case avgFillPrice = "avg_fill_price"
+    }
+}
+
+struct WatchedSymbol: Codable, Hashable, Identifiable {
+    var id: String { symbol }
+    let symbol: String
+    var alertCallWall: Bool
+    var alertPutWall: Bool
+    var alertZeroGamma: Bool
+
+    static func defaultFor(_ symbol: String) -> WatchedSymbol {
+        WatchedSymbol(symbol: symbol, alertCallWall: false, alertPutWall: false, alertZeroGamma: false)
+    }
+}

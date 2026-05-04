@@ -12,7 +12,7 @@ import math
 from datetime import date, datetime
 from typing import Optional
 
-from ib_insync import IB, Option, Stock, Ticker
+from ib_insync import IB, LimitOrder, MarketOrder, Option, Order, Stock, Ticker
 
 from ..models.options import Greeks, OptionChain, OptionQuote
 
@@ -172,6 +172,84 @@ class IBKRService:
             quotes=quotes,
         )
 
+    async def get_multi_expiry_chain(
+        self,
+        symbol: str,
+        num_expiries: int = 3,
+        strike_window: int = 8,
+    ) -> OptionChain:
+        """Fetch the N nearest future expiries and merge into one OptionChain.
+
+        Strikes are reused across expiries; tickers are requested in one batch
+        to keep the round-trip count low. Used by the multi-expiry GEX route.
+        """
+        ib = await self._ensure_connected()
+        underlying = Stock(symbol, "SMART", "USD")
+        await ib.qualifyContractsAsync(underlying)
+
+        params = await ib.reqSecDefOptParamsAsync(
+            underlyingSymbol=symbol,
+            futFopExchange="",
+            underlyingSecType="STK",
+            underlyingConId=underlying.conId,
+        )
+        if not params:
+            raise RuntimeError(f"No option parameters returned for {symbol}")
+
+        chain = (
+            next((p for p in params if p.exchange == "SMART" and p.tradingClass == symbol), None)
+            or next((p for p in params if p.exchange == "SMART"), None)
+            or params[0]
+        )
+
+        today = date.today()
+        all_expiries = sorted({datetime.strptime(e, "%Y%m%d").date() for e in chain.expirations})
+        future_expiries = [e for e in all_expiries if e >= today][:num_expiries]
+        if not future_expiries:
+            raise RuntimeError(f"No future expirations for {symbol}")
+
+        spot = await self.get_underlying_price(symbol)
+        if not _is_real(spot) or spot <= 0:
+            raise RuntimeError(f"Could not retrieve spot price for {symbol}")
+
+        viable = sorted(float(s) for s in chain.strikes if 0.9 * spot <= float(s) <= 1.1 * spot)
+        if not viable:
+            viable = sorted(float(s) for s in chain.strikes if 0.7 * spot <= float(s) <= 1.3 * spot)
+        nearest = sorted(sorted(viable, key=lambda s: abs(s - spot))[: strike_window * 2])
+
+        candidates = [
+            Option(symbol, exp.strftime("%Y%m%d"), strike, right, "SMART", tradingClass=symbol)
+            for exp in future_expiries
+            for strike in nearest
+            for right in ("C", "P")
+        ]
+        await ib.qualifyContractsAsync(*candidates)
+        qualified = [c for c in candidates if c.conId]
+        if not qualified:
+            raise RuntimeError(f"No tradable strikes for {symbol} across {len(future_expiries)} expiries")
+
+        logger.info(
+            "%s multi-expiry: spot=%.2f, %d expiries, %d strikes, %d/%d qualified",
+            symbol, spot, len(future_expiries), len(nearest), len(qualified), len(candidates),
+        )
+
+        tickers = await ib.reqTickersAsync(*qualified)
+        quotes = []
+        for t in tickers:
+            try:
+                exp_str = t.contract.lastTradeDateOrContractMonth
+                exp_date = datetime.strptime(exp_str, "%Y%m%d").date()
+            except (ValueError, AttributeError):
+                continue
+            quotes.append(self._ticker_to_quote(t, symbol, exp_date, spot))
+
+        return OptionChain(
+            symbol=symbol,
+            underlying_price=spot,
+            expiries=future_expiries,
+            quotes=quotes,
+        )
+
     @staticmethod
     def _ticker_to_quote(t: Ticker, symbol: str, expiry: date, spot: float) -> OptionQuote:
         c = t.contract
@@ -199,3 +277,91 @@ class IBKRService:
             underlying_price=spot,
             greeks=greeks,
         )
+
+    async def get_positions(self) -> list[dict]:
+        ib = await self._ensure_connected()
+        portfolio = ib.portfolio()
+        out: list[dict] = []
+        for item in portfolio:
+            c = item.contract
+            out.append({
+                "symbol": c.symbol,
+                "sec_type": c.secType,
+                "right": getattr(c, "right", None),
+                "strike": getattr(c, "strike", None),
+                "expiry": getattr(c, "lastTradeDateOrContractMonth", None) or None,
+                "position": float(item.position),
+                "avg_cost": float(item.averageCost),
+                "market_price": float(item.marketPrice) if _is_real(item.marketPrice) else None,
+                "market_value": float(item.marketValue) if _is_real(item.marketValue) else None,
+                "unrealized_pnl": float(item.unrealizedPNL) if _is_real(item.unrealizedPNL) else None,
+                "realized_pnl": float(item.realizedPNL) if _is_real(item.realizedPNL) else None,
+            })
+        return out
+
+    async def get_account_summary(self) -> dict:
+        ib = await self._ensure_connected()
+        rows = ib.accountSummary()
+        wanted = {
+            "NetLiquidation", "BuyingPower", "AvailableFunds",
+            "TotalCashValue", "GrossPositionValue", "MaintMarginReq",
+        }
+        out: dict[str, float] = {}
+        for r in rows:
+            if r.tag in wanted:
+                try:
+                    out[r.tag] = float(r.value)
+                except ValueError:
+                    pass
+        return out
+
+    async def place_option_order(
+        self,
+        symbol: str,
+        expiry: date,
+        strike: float,
+        right: str,
+        action: str,         # "BUY" or "SELL"
+        quantity: int,
+        order_type: str = "LMT",   # "LMT" or "MKT"
+        limit_price: Optional[float] = None,
+    ) -> dict:
+        ib = await self._ensure_connected()
+        contract = Option(
+            symbol, expiry.strftime("%Y%m%d"), strike, right, "SMART",
+            tradingClass=symbol,
+        )
+        await ib.qualifyContractsAsync(contract)
+        if not contract.conId:
+            raise RuntimeError(f"Could not qualify {symbol} {expiry} {strike}{right}")
+
+        action = action.upper()
+        if action not in ("BUY", "SELL"):
+            raise ValueError("action must be BUY or SELL")
+
+        if order_type.upper() == "MKT":
+            order = MarketOrder(action, quantity)
+        else:
+            if limit_price is None:
+                raise ValueError("limit_price required for LMT orders")
+            order = LimitOrder(action, quantity, round(float(limit_price), 2))
+
+        trade = ib.placeOrder(contract, order)
+        # Give IBKR a moment to acknowledge
+        await asyncio.sleep(0.5)
+        return {
+            "order_id": trade.order.orderId,
+            "perm_id": trade.order.permId,
+            "status": trade.orderStatus.status,
+            "filled": float(trade.orderStatus.filled),
+            "remaining": float(trade.orderStatus.remaining),
+            "avg_fill_price": float(trade.orderStatus.avgFillPrice or 0.0),
+            "symbol": symbol,
+            "strike": strike,
+            "right": right,
+            "expiry": expiry.isoformat(),
+            "action": action,
+            "quantity": quantity,
+            "order_type": order_type.upper(),
+            "limit_price": limit_price,
+        }

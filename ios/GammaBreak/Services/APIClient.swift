@@ -55,6 +55,53 @@ final class APIClient: ObservableObject {
         try await get("/api/quote/\(symbol)")
     }
 
+    func ivRank(symbol: String) async throws -> IVRank {
+        try await get("/api/iv-rank/\(symbol)")
+    }
+
+    func positions() async throws -> [Position] {
+        try await get("/api/positions")
+    }
+
+    func account() async throws -> AccountSummary {
+        try await get("/api/account")
+    }
+
+    func placeOrder(_ req: OrderRequest) async throws -> OrderResult {
+        try await post("/api/order", body: req)
+    }
+
+    private func post<Body: Encodable, T: Decodable>(_ path: String, body: Body) async throws -> T {
+        guard var components = URLComponents(string: settings.backendURL) else { throw APIError.badURL }
+        components.path = path
+        guard let url = components.url else { throw APIError.badURL }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if !settings.authToken.isEmpty {
+            req.setValue("Bearer \(settings.authToken)", forHTTPHeaderField: "Authorization")
+        }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .formatted(Self.dateFmt)
+        req.httpBody = try encoder.encode(body)
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: req)
+        } catch {
+            throw APIError.transport(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw APIError.http(-1, "non-HTTP") }
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+        do { return try decoder.decode(T.self, from: data) }
+        catch { throw APIError.decoding(error) }
+    }
+
     private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
         guard var components = URLComponents(string: settings.backendURL) else {
             throw APIError.badURL
@@ -92,7 +139,7 @@ final class APIClient: ObservableObject {
         }
     }
 
-    private static let dateFmt: DateFormatter = {
+    static let dateFmt: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")

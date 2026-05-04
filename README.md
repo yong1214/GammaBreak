@@ -68,14 +68,27 @@ and paste the bearer token, then add tickers in the **Watchlist** tab.
 The model is intentionally rule-based and auditable. For a given symbol it:
 
 1. Pulls the option chain (per-strike δ, γ, IV) from IBKR.
-2. Pulls the dealer gamma profile (zero-gamma, call wall, put wall) from FlashAlpha.
-3. Pulls realized vol from Polygon.
+2. Aggregates dealer gamma exposure across the N nearest expiries (chain-derived) or pulls it from a paid provider if configured.
+3. Pulls realized vol from Polygon (optional).
 4. Computes a 1σ expected move over the chosen horizon.
 5. Sets bias from spot vs. zero-gamma and proximity to the nearest wall.
 6. Clamps upper/lower targets at the call and put walls.
 
 Every prediction returns a `rationale` array so the iPhone UI can show *why*
 the model chose its bias.
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/quote/{symbol}` | Polygon snapshot |
+| GET | `/api/chain/{symbol}` | IBKR option chain (single nearest expiry) |
+| GET | `/api/gamma/{symbol}?expiries=N` | Multi-expiry dealer gamma profile |
+| GET | `/api/iv-rank/{symbol}` | ATM IV + rank/percentile vs. SQLite history |
+| GET | `/api/predict/{symbol}?horizon_minutes=N` | Composite price-action prediction |
+| GET | `/api/account` | IBKR account summary |
+| GET | `/api/positions` | Open positions with P&L |
+| POST | `/api/order` | Place an option order (LMT or MKT) |
 
 ## License
 
